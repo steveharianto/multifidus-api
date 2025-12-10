@@ -1,95 +1,99 @@
-
-# Multifidus MRI Segmentation & Reporting Demo
+# Multifidus MRI Segmentation Demo
 
 End-to-end AI service that segments the lumbar multifidus muscle on axial T2 MRI slices and exposes the model through a FastAPI REST API.  
-The project also includes a small LoRA-fine-tuned language model that generates short clinical-style summaries from numeric measurements.
+Originally this project also included a LoRA-fine-tuned language model; however, due to memory limits on the Render free tier, the **deployed backend contains only the segmentation service**.  
+The LoRA model and training code remain in the repository as a demonstration of LLM fine-tuning capability.
 
 This project demonstrates **full-stack AI engineering capability**:
 - CV model training + preprocessing  
 - API deployment (Docker + FastAPI)  
-- LLM fine-tuning (LoRA)  
 - Frontend web demo (TailwindCSS + static hosting)  
-- Production-style logging + architecture  
+- Production-style logging, database, and containerized architecture  
+- LLM fine-tuning (LoRA) included in repo (not deployed to cloud)
 
 ---
 
 ## 🚀 Live Demo
 
 - **Frontend (Netlify):** https://multifidus-demo.netlify.app  
-- **Backend API (Render, Swagger UI):** https://multifidus-api.onrender.com/docs  
+- **Backend Segmentation API (Render):** https://multifidus-api.onrender.com/docs  
 
 ---
 
 ## 📌 What This Project Does
 
+### Deployed Demo
 - Accepts a single axial T2-weighted lumbar MRI slice (`.dcm` or `.png/.jpg`).
 - Runs a U-Net (ResNet-34 encoder) segmentation model to highlight the multifidus muscle.
-- Serves results via a Dockerized FastAPI backend deployed on Render.
-- Optionally generates a short “clinical-style” summary using a LoRA-fine-tuned Flan-T5 model.
+- Returns a color overlay as a base64 PNG.
+- Logs inference latency into SQLite inside the container.
+- Hosted as a Dockerized FastAPI service on Render.
+
+### Included in Repository (not deployed)
+- LoRA-fine-tuned Flan-T5 model that generates clinical-style summaries from numerical measurements.  
+  This demonstrates LLM fine-tuning ability even though the actual model cannot be deployed on a 512 MB service.
 
 ---
 
-### Components
+## 🏗️ Components
 
-* **Frontend:** Static TailwindCSS site on Netlify.
-* **Backend:** FastAPI + Uvicorn inside a Docker container.
+* **Frontend:** Static TailwindCSS single-page web app (Netlify).
+* **Backend:** FastAPI + Uvicorn inside a Docker container (Render).
 * **Segmentation model:** U-Net with ResNet-34 encoder.
-* **LLM module:** Flan-T5 with LoRA adapters (optional endpoint).
-* **Logging:** SQLite (filename, latency, model version).
+* **Logging:** SQLite database for inference logs.
+* **LLM module (local):** Flan-T5 with LoRA adapters (repo only).
 
 ---
 
 ## 🔄 Pipeline Details
 
-### 🧠 Segmentation Pipeline
+### 🧠 Segmentation Pipeline (Deployed)
 
 1. **Input formats**
-
-   * `.dcm` via `pydicom`
-   * `.png` / `.jpg` grayscale via OpenCV
+   - `.dcm` via `pydicom`
+   - `.png` / `.jpg` grayscale via OpenCV
 
 2. **Preprocessing**
-
-   * Convert to float32
-   * Min–max normalize to `[0,1]`
-   * Resize to `256×256`
-   * Tensor shape `(1,1,H,W)`
+   - Convert to float32  
+   - Min–max normalize to `[0,1]`  
+   - Resize to `256×256`  
+   - Shape `(1,1,H,W)`  
 
 3. **Model**
-
-   * U-Net with ResNet-34 encoder
-   * 1 output class → sigmoid → threshold at 0.5
+   - U-Net with ResNet-34 encoder  
+   - 1 output class → sigmoid → threshold at 0.5  
 
 4. **Postprocessing**
-
-   * Resize mask to original shape
-   * Apply JET colormap
-   * Alpha-blend overlay
-   * Encode as PNG, return as Base64
+   - Resize mask back to original size  
+   - Apply JET colormap  
+   - Alpha-blend with original slice  
+   - Encode as PNG → base64  
+   - Log latency into SQLite  
 
 ---
 
-### 📝 LoRA Reporting Pipeline (Optional)
+### 📝 LoRA Reporting Pipeline (Not Deployed)
 
-1. **Input JSON fields**
+The repository contains a complete training and inference script for a small LoRA fine-tuned model:
 
-   * `level` (`"L4-L5"`, `"L5-S1"`, etc.)
-   * `side` (`"left"`, `"right"`, `"bilateral"`)
-   * `muscle_area_mm2`
-   * `fat_infiltration_pct`
-   * `degeneration_grade`
+1. **Input fields**
+   - `level`  
+   - `side`  
+   - `muscle_area_mm2`  
+   - `fat_infiltration_pct`  
+   - `degeneration_grade`  
 
 2. **Model**
-
-   * `google/flan-t5-base`
-   * LoRA fine-tuning on attention projections (`q`, `v`)
-   * Trainable parameters: **~0.36%** of the base model
+   - `google/flan-t5-base`  
+   - LoRA on attention projections (`q`, `v`)  
+   - Trainable params ~0.36% of base model  
 
 3. **Output format**
+   - `Summary:`  
+   - `Risk:`  
+   - `Recommendation:`  
 
-   * `Summary: …`
-   * `Risk: …`
-   * `Recommendation: …`
+**Note:** This model runs correctly in Colab/local, but is not deployed due to Render’s RAM limitations.
 
 ---
 
@@ -97,40 +101,44 @@ This project demonstrates **full-stack AI engineering capability**:
 
 ### 🔹 Segmentation Model (U-Net ResNet-34)
 
-* **Parameters:** ~24.8M
-* **Training data:** Axial T2 MRI slices with ITK-Snap manual MF segmentation
-* **Training style:**
-
-  * Slice-wise
-  * 256×256
-  * Horizontal flips, light rotation
-* **Loss:** BCE with sigmoid
-
----
-
-### 🔹 LoRA LLM Model (Flan-T5)
-
-* **Base:** `google/flan-t5-base` (~248M params)
-* **Fine-tuning method:** LoRA (`r=8`, dropout 0.1)
-* **Dataset:** ~20 handcrafted examples mapping metrics → templated summaries
+- **Parameters:** ~24.8M  
+- **Training data:** Axial T2 MRI slices with manual ITK-Snap segmentation  
+- **Training setup:**
+  - Slice-based training  
+  - 256×256 resolution  
+  - Augmentations: flips, light rotation  
+- **Loss:** Binary cross-entropy with sigmoid  
 
 ---
 
-## 📡 API Endpoints
+### 🔹 LoRA Model (Flan-T5) — Repository Only
+
+- **Base:** 248M parameter model  
+- **Fine-tuning:** LoRA `r=8`, dropout 0.1  
+- **Dataset:** ~20 handcrafted clinical-style examples  
+- **Purpose:** Demonstrate LLM engineering skills  
+
+---
+
+## 📡 API Endpoints (Deployed)
+
+### ➤ `GET /health`
+Simple health check.
+
+---
 
 ### ➤ `POST /segment`
-
-Run segmentation on uploaded MRI slice.
+Run segmentation on an uploaded MRI slice.
 
 #### Request
-
 ```
+
 Content-Type: multipart/form-data
 file: <MRI slice>
-```
+
+````
 
 #### Response
-
 ```json
 {
   "filename": "slice01.dcm",
@@ -139,35 +147,16 @@ file: <MRI slice>
   "width": 512,
   "height": 512
 }
-```
+````
 
 ---
 
-### ➤ `POST /report`  *(Optional)*
+## 📝 API Endpoints (Local Only)
 
-Generate a clinical-style text summary.
+### ➤ `POST /report`
 
-#### Request
-
-```json
-{
-  "level": "L4-L5",
-  "side": "left",
-  "muscle_area_mm2": 423,
-  "fat_infiltration_pct": 18,
-  "degeneration_grade": "mild"
-}
-```
-
-#### Response
-
-```json
-{
-  "report": "Summary: ...\nRisk: ...\nRecommendation: ..."
-}
-```
-
-Interactive API docs: `/docs`
+Only available in the development version that loads the LoRA model.
+Not deployed to Render.
 
 ---
 
@@ -175,14 +164,14 @@ Interactive API docs: `/docs`
 
 Features:
 
-* Drag-and-drop or file-browse MRI upload
-* Clean medical/demo-focused UI
-* Real-time call to backend `/segment`
-* Displays inference latency
-* Error handling + loading state
-* Optional LLM summary panel
+* Drag-and-drop or file upload
+* Clean medical-themed UI
+* Real-time calls to `/segment`
+* Loading and error states
+* Shows inference latency
+* Deployed via Netlify
 
-Deployed at: **[https://multifidus-demo.netlify.app](https://multifidus-demo.netlify.app)**
+URL: **[https://multifidus-demo.netlify.app](https://multifidus-demo.netlify.app)**
 
 ---
 
@@ -195,21 +184,21 @@ git clone https://github.com/<your-username>/multifidus-api.git
 cd multifidus-api
 ```
 
-### 2) Install
+### 2) Install (segmentation backend)
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3) Run
+### 3) Run the API
 
 ```bash
 uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open: `http://localhost:8000/docs`
+Open Swagger UI: `http://localhost:8000/docs`
 
 ---
 
@@ -227,7 +216,8 @@ docker build -t multifidus-api .
 docker run -p 8000:8000 multifidus-api
 ```
 
-Backend now live at: `http://localhost:8000`
+Backend now available at:
+`http://localhost:8000`
 
 ---
 
@@ -235,56 +225,60 @@ Backend now live at: `http://localhost:8000`
 
 ### Backend (Render)
 
-* Dockerized FastAPI service
-* Detects port 8000 automatically
-* Production process:
+* Uses a slim Python base image
+* Installs OpenCV dependencies
+* Loads only the segmentation model (fits in 512 MB RAM)
+* Startup command:
 
-  ```
-  uvicorn app:app --host 0.0.0.0 --port 8000
-  ```
+```
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
 
 ### Frontend (Netlify)
 
-* Static `index.html` + TailwindCSS
-* Calls the deployed backend URL
+* Static Tailwind build
+* Calls the Render backend via fetch
+* Publicly accessible demo page
 
 ---
 
 ## ⚠️ Limitations & Future Work
 
-### Limitations
+### Current Limitations
 
-* Not a clinical model
-* Single-slice only (no 3D context)
-* No ONNX/TensorRT optimization yet
+* Not a medical device
+* Single-slice segmentation only
+* No GPU acceleration on Render
+* LoRA model not deployed due to memory limits
 
-### Future improvements
+### Future Enhancements
 
-* Volume-level analysis + spinal level auto-detection
-* Real annotated datasets & multi-center evaluation
-* Better dashboards for inference logs and monitoring
-* GPU-optimized deployment with ONNX Runtime
+* Automatic spinal level detection
+* 3D segmentation
+* Deployment with GPU-backed inference
+* ONNX/TensorRT optimization
+* Deploy LoRA reporter on a higher-tier GPU cloud
 
 ---
 
 ## 🧰 Tech Stack
 
-**Backend**
+### Backend
 
 * FastAPI
 * Python 3.10
 * Uvicorn
 * segmentation-models-pytorch
 * OpenCV, NumPy, pydicom
-* SQLite logs
+* SQLite logging
 
-**LLM**
+### LLM (local)
 
 * Hugging Face Transformers
 * PEFT (LoRA)
 * Flan-T5
 
-**Infra**
+### Infra
 
 * Docker
 * Render (backend)
