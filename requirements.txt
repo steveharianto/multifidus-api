@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydicom
+opencv-python
+segmentation-models-pytorch
+torch
+torchvision
+numpy
+transformers
+peft
+accelerate
+sentencepiece
