@@ -1,33 +1,29 @@
-# app.py
 import os
 import io
 import time
 import base64
+import sqlite3
 
 import cv2
 import torch
 import numpy as np
 import pydicom
-import sqlite3
 import segmentation_models_pytorch as smp
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM 
-from peft import PeftModel
-
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- CONFIG ---
-CKPT_PATH = "runs_unet/unet_resnet34_best.pth"  
+CKPT_PATH = "runs_unet/unet_resnet34_best.pth"
 IMG_SIZE  = 256
 DEVICE    = "cuda" if torch.cuda.is_available() else "cpu"
-DB_PATH = "inference_logs.db"
-MODEL_VERSION = "unet_resnet34_v1" 
 
-LLM_BASE_MODEL = "google/flan-t5-base"
-LLM_ADAPTER_DIR = "outputs_lora_reporter"
+DB_PATH = "inference_logs.db"
+MODEL_VERSION = "unet_resnet34_v1"
+
+
+# --- DB INIT ---
 
 def init_db():
     """Create SQLite DB and table if not exists."""
@@ -47,19 +43,14 @@ def init_db():
     conn.commit()
     conn.close()
 
-class ReportRequest(BaseModel):
-    level: str
-    side: str
-    muscle_area_mm2: float
-    fat_infiltration_pct: float
-    degeneration_grade: str
 
-# --- LOAD MODEL ---
+# --- LOAD SEGMENTATION MODEL ---
+
 model = smp.Unet(
     encoder_name="resnet34",
     encoder_weights=None,
     in_channels=1,
-    classes=1
+    classes=1,
 ).to(DEVICE)
 
 state = torch.load(CKPT_PATH, map_location=DEVICE)
@@ -68,13 +59,18 @@ model.eval()
 
 init_db()
 
-llm_tokenizer = AutoTokenizer.from_pretrained(LLM_BASE_MODEL)
-llm_base = AutoModelForSeq2SeqLM.from_pretrained(LLM_BASE_MODEL)
-llm_model = PeftModel.from_pretrained(llm_base, LLM_ADAPTER_DIR)
-llm_model.to(DEVICE)
-llm_model.eval()
+
+# --- FASTAPI APP ---
 
 app = FastAPI(title="Multifidus Segmentation API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],      # you can restrict this later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- HELPERS ---
@@ -138,45 +134,8 @@ def bgr_image_to_base64_png(img_bgr: np.ndarray) -> str:
     b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
     return b64
 
-def build_llm_input_text(level, side, muscle_area_mm2, fat_infiltration_pct, degeneration_grade):
-    return (
-        "You are an AI assistant that generates short clinical-style reports for lumbar multifidus muscle degeneration.\n"
-        "Given the following measurements, produce a report with exactly three sections: Summary, Risk, and Recommendation.\n"
-        "Input measurements:\n"
-        f"level: {level}\n"
-        f"side: {side}\n"
-        f"muscle_area_mm2: {muscle_area_mm2}\n"
-        f"fat_infiltration_pct: {fat_infiltration_pct}\n"
-        f"degeneration_grade: {degeneration_grade}"
-    )
-
-
-def generate_multifidus_report(level, side, muscle_area_mm2, fat_infiltration_pct, degeneration_grade):
-    prompt = build_llm_input_text(level, side, muscle_area_mm2, fat_infiltration_pct, degeneration_grade)
-    inputs = llm_tokenizer(prompt, return_tensors="pt", truncation=True).to(DEVICE)
-
-    with torch.no_grad():
-        outputs = llm_model.generate(
-            **inputs,
-            max_length=160,
-            num_beams=4,
-            do_sample=False 
-        )
-
-    text = llm_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return text
-
 
 # --- ROUTES ---
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],      
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/health")
 def health():
@@ -201,7 +160,7 @@ async def segment(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(
             status_code=400,
-            content={"error": str(e)}
+            content={"error": str(e)},
         )
 
     latency_ms = int((time.time() - start_time) * 1000)
@@ -223,7 +182,6 @@ async def segment(file: UploadFile = File(...)):
         # Fail silently for logging errors, but print for debugging
         print(f"[logging error] {e}")
 
-    # Console log (still useful)
     print(f"[segment] filename={file.filename} latency_ms={latency_ms}")
 
     return {
@@ -231,30 +189,5 @@ async def segment(file: UploadFile = File(...)):
         "latency_ms": latency_ms,
         "overlay_base64": overlay_b64,
         "width": overlay_bgr.shape[1],
-        "height": overlay_bgr.shape[0]
-    }
-
-@app.post("/report")
-async def report(req: ReportRequest):
-    """
-    Generate a clinical-style multifidus report from numeric measurements.
-    """
-    try:
-        text = generate_multifidus_report(
-            level=req.level,
-            side=req.side,
-            muscle_area_mm2=req.muscle_area_mm2,
-            fat_infiltration_pct=req.fat_infiltration_pct,
-            degeneration_grade=req.degeneration_grade,
-        )
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    return {
-        "level": req.level,
-        "side": req.side,
-        "muscle_area_mm2": req.muscle_area_mm2,
-        "fat_infiltration_pct": req.fat_infiltration_pct,
-        "degeneration_grade": req.degeneration_grade,
-        "report": text,
+        "height": overlay_bgr.shape[0],
     }
